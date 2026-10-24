@@ -2,12 +2,13 @@
 // Clawd in any terminal, no Claude Code needed.
 //   node cli/dance.ts            a little show: every mood in turn
 //   node cli/dance.ts dance      one mood, on repeat
-//   node cli/dance.ts --big      twice the size
+//   node cli/dance.ts --tiny     logo-sized (also --big)
 // Keys: ←/→ change mood, space dances, h/l walk Clawd around, q quits.
-import { FPS, MOODS, Stage, ansiLines, upscale, type Mood } from '../plugin/hooks/clawd.ts'
+import { FPS, MOODS, SIZES, Stage, ansiLines, stageWidth, upscale, type Mood, type Size } from '../plugin/hooks/clawd.ts'
 
 const args = process.argv.slice(2)
-const scale = args.includes('--big') ? 2 : 1
+const size: Size = args.includes('--big') ? 'big' : args.includes('--tiny') ? 'tiny' : 'small'
+const { encoding, scale } = SIZES[size]
 const only = args.find(a => !a.startsWith('-')) as Mood | undefined
 if (only && !MOODS.includes(only)) {
   console.error(`Unknown mood "${only}". Try one of: ${MOODS.join(', ')}`)
@@ -15,7 +16,7 @@ if (only && !MOODS.includes(only)) {
 }
 
 const out = process.stdout
-const width = () => Math.max(24, Math.floor(Math.min(out.columns ?? 80, 160) / scale))
+const width = () => Math.max(24, stageWidth(Math.min(out.columns ?? 80, 160), size))
 const stage = new Stage(width(), Date.now() & 0xffff)
 let index = only ? MOODS.indexOf(only) : 0
 let shownFor = 0
@@ -34,7 +35,7 @@ show(MOODS[index])
 let drawn = 0
 const draw = () => {
   if (stage.width !== width()) stage.resize(width())
-  const lines = ansiLines(upscale(stage.tick(), scale))
+  const lines = ansiLines(upscale(stage.tick(), scale), encoding)
   const label = `\x1b[2m  ${stage.mood.padEnd(10)}  ←/→ mood · space dance · h/l walk · q quit\x1b[0m`
   let s = drawn ? `\x1b[${drawn}F` : ''
   for (const line of [...lines, label]) s += '\x1b[2K' + line + '\n'

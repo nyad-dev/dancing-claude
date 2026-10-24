@@ -1,4 +1,4 @@
-export type ClawdSize = 'small' | 'big'
+export type ClawdSize = 'tiny' | 'small' | 'big'
 
 /** What the desktop band draws: one clip of one mood, looping. */
 export type ClawdScene = { mood: string; clip: string; n: number }

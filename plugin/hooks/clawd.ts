@@ -6,7 +6,9 @@
 //
 // Geometry is the welcome-screen logo at half-block resolution: a 12x8 body,
 // 1x2 eyes, 2x2 arm nubs and four 1x2 legs. Everything is drawn in "base
-// pixels"; two stacked pixels make one terminal cell (▀ / ▄).
+// pixels". The `half` encoding stacks two pixels in a cell (▀ ▄); the `quad`
+// encoding packs 2x4 pixels into a quarter-block cell (▘ ▞ ▙ ...), which is
+// the logo's own size: Clawd three rows tall.
 
 export type Color = number // 0xRRGGBB; 0 is transparent
 
@@ -33,16 +35,21 @@ export const PALETTE = {
   term: 0x7ee787,
   bang: 0xffb84d,
   ask: 0x8ab4f8,
-  shadow: 0x3b322e,
   code1: 0x7ee787,
   code2: 0x8ab4f8,
   code3: 0xffa657,
+  paper: 0xf4f1e6,
+  ink: 0x9a948a,
+  pencil: 0xf2c14e,
 } as const
 
-/** Rows of the stage in base pixels: 5 of headroom, 8 of body, 2 of legs, 1 of shadow. */
-export const STAGE_H = 16
-/** Body top while standing. */
-const TOP = 5
+/** The body colours: a quarter-block cell lets anything else win over them. */
+const SKIN = new Set<Color>([PALETTE.body, PALETTE.back, PALETTE.angry])
+
+/** Rows of the stage in base pixels: 2 of headroom, 8 of body, 2 of legs. */
+export const STAGE_H = 12
+/** Body top while standing. Even, so quarter-blocks split the body like the logo. */
+const TOP = 2
 export const FPS = 10
 
 // ---------------------------------------------------------------- canvas
@@ -82,7 +89,7 @@ export class Canvas {
   }
 }
 
-/** Nearest-neighbour upscale, for the large size. */
+/** Nearest-neighbour upscale, for the big size. */
 export function upscale(src: Canvas, k: number): Canvas {
   if (k === 1) return src
   const out = new Canvas(src.w * k, src.h * k)
@@ -120,8 +127,9 @@ export type Pose = {
   /** Which way a side view faces: 1 right, -1 left. */
   dir: 1 | -1
   tint: Color
-  shadow: boolean
   laptop: false | 0 | 1
+  /** A notepad held low on the right; the number is where the pencil is. */
+  notepad: false | 0 | 1 | 2
   /** Drawn behind the body, relative to the body's resting top-left. */
   behind: Prop[]
   /** Drawn over the body, relative to the body's resting top-left. */
@@ -132,7 +140,7 @@ export function pose(p: Partial<Pose> = {}): Pose {
   return {
     dx: 0, dy: 0, squash: 0, lean: 0, eyes: 'open', lookX: 0, lookY: 0,
     armL: 'out', armR: 'out', legs: [0, 0, 0, 0], blush: false,
-    facing: 'front', dir: 1, tint: PALETTE.body, shadow: true, laptop: false,
+    facing: 'front', dir: 1, tint: PALETTE.body, laptop: false, notepad: false,
     behind: [], props: [],
     ...p,
   }
@@ -148,7 +156,6 @@ export const SPRITES = {
   note: S(PALETTE.note, '.##', '.#.', '##.', '##.'),
   note2: S(PALETTE.note2, '.#.', '.##', '##.', '##.'),
   heart: S(PALETTE.heart, '#.#', '###', '.#.'),
-  bigHeart: S(PALETTE.heart, '##.##', '#####', '.###.', '..#..'),
   spark: S(PALETTE.spark, '.#.', '###', '.#.'),
   dot: S(PALETTE.spark, '#'),
   z: S(PALETTE.z, '###', '.#.', '###'),
@@ -216,12 +223,6 @@ export function drawClawd(cv: Canvas, p: Pose, x0: number): void {
 
   for (const q of p.behind) cv.bits(restX + q.x, TOP + q.y, q.s.rows, q.c ?? q.s.c, q.mirror, q.s.pal)
 
-  if (p.shadow) {
-    const lift = Math.max(0, -p.dy)
-    const sw = Math.max(4, bw - 2 - lift * 2)
-    cv.rect(left + Math.round((bw - sw) / 2), TOP + 10, sw, 1, PALETTE.shadow)
-  }
-
   const body = p.facing === 'back' ? PALETTE.back : p.tint
 
   // legs
@@ -232,13 +233,10 @@ export function drawClawd(cv: Canvas, p: Pose, x0: number): void {
     if (h > 0) cv.rect(lx, legTop, 1, h, body)
   })
 
-  // arms (behind the body edge, so draw first)
+  // arms, then the body over their roots
   const arm = (a: Arm, side: -1 | 1) => {
     if (a === 'hidden') return
-    for (const [ox, y, w, h] of ARMS[a]) {
-      const ax = side < 0 ? left - ox - w : right + ox
-      cv.rect(ax, top + y + (a === 'out' || a === 'down' ? 0 : 0), w, h, body)
-    }
+    for (const [ox, y, w, h] of ARMS[a]) cv.rect(side < 0 ? left - ox - w : right + ox, top + y, w, h, body)
   }
   if (p.facing === 'front') {
     arm(p.armL, -1)
@@ -250,7 +248,6 @@ export function drawClawd(cv: Canvas, p: Pose, x0: number): void {
     arm(p.armL, 1)
   }
 
-  // body, with the top half leaning
   for (let r = 0; r < bh; r++) cv.rect(left + (r < 4 ? p.lean : 0), top + r, bw, 1, body)
 
   // face
@@ -263,8 +260,7 @@ export function drawClawd(cv: Canvas, p: Pose, x0: number): void {
     const rx = right - 3 + lean + look
     const c = e.c ?? PALETTE.eye
     cv.bits(lx + e.ox, eyeY + e.oy, e.rows, c)
-    const w = e.rows[0].length
-    cv.bits(rx - (e.ox + w - 1), eyeY + e.oy, e.rows, c, true)
+    cv.bits(rx - (e.ox + e.rows[0].length - 1), eyeY + e.oy, e.rows, c, true)
     if (p.blush) {
       cv.set(left + 1 + lean, top + 4, PALETTE.blush)
       cv.set(right - 2 + lean, top + 4, PALETTE.blush)
@@ -276,6 +272,7 @@ export function drawClawd(cv: Canvas, p: Pose, x0: number): void {
   }
 
   if (p.laptop !== false) drawLaptop(cv, X, top, p.laptop)
+  if (p.notepad !== false) drawNotepad(cv, X, top, p.notepad)
 
   for (const q of p.props) cv.bits(restX + q.x, TOP + q.y, q.s.rows, q.c ?? q.s.c, q.mirror, q.s.pal)
 }
@@ -289,6 +286,17 @@ function drawLaptop(cv: Canvas, X: number, top: number, typing: 0 | 1): void {
   // paws on the keys, taking turns
   cv.rect(X + 2, top + 4 + typing, 2, 1, PALETTE.body)
   cv.rect(X + 8, top + 5 - typing, 2, 1, PALETTE.body)
+}
+
+function drawNotepad(cv: Canvas, X: number, top: number, pen: 0 | 1 | 2): void {
+  // a little pad held low on the right, ruled, with a pencil scribbling across
+  cv.rect(X + 7, top + 4, 5, 4, PALETTE.paper)
+  cv.rect(X + 8, top + 5, 3, 1, PALETTE.ink)
+  cv.rect(X + 8, top + 7, 2, 1, PALETTE.ink)
+  cv.rect(X + 12, top + 4, 1, 2, PALETTE.body) // the paw holding it
+  cv.set(X + 7 + pen, top + 3, PALETTE.pencil)
+  cv.set(X + 8 + pen, top + 2, PALETTE.pencil)
+  cv.set(X + 7 + pen, top + 4 + (pen % 2), PALETTE.eye) // the tip
 }
 
 // ---------------------------------------------------------------- clips
@@ -319,14 +327,14 @@ function blinks(f: number, seed: number, len: number): boolean {
 }
 
 /** Music notes drifting up beside Clawd. */
-function notes(f: number, x: number, period = 12): Prop[] {
+function notes(f: number, period = 12): Prop[] {
   const out: Prop[] = []
   for (let k = 0; k < 2; k++) {
     const t = (f + k * (period / 2)) % period
-    const y = 1 - Math.floor(t / 2)
-    if (y < -3) continue
+    const y = 4 - Math.floor(t / 2)
+    if (y < -2) continue
     const side = (Math.floor((f + k * (period / 2)) / period) + k) % 2
-    out.push({ s: side ? SPRITES.note : SPRITES.note2, x: side ? x + 15 : x - 6 + (t % 4 < 2 ? 0 : 1), y })
+    out.push({ s: side ? SPRITES.note : SPRITES.note2, x: side ? 15 : -6 + (t % 4 < 2 ? 0 : 1), y })
   }
   return out
 }
@@ -335,49 +343,99 @@ function hearts(f: number, period = 14): Prop[] {
   const out: Prop[] = []
   for (let k = 0; k < 2; k++) {
     const t = (f + k * (period / 2)) % period
-    const y = 2 - Math.floor(t / 2)
-    if (y < -3) continue
+    const y = 4 - Math.floor(t / 2)
+    if (y < -2) continue
     out.push({ s: SPRITES.heart, x: k ? 14 + (t % 4 < 2 ? 0 : 1) : -5 - (t % 4 < 2 ? 0 : 1), y })
   }
   return out
 }
 
-const legsStep = (f: number): Pose['legs'] => cyc(f, [[1, 0, 1, 0], [0, 0, 0, 0], [0, 1, 0, 1], [0, 0, 0, 0]] as const)
+const legsStep = (f: number): Pose['legs'] => cyc(f, [[2, 0, 2, 0], [0, 0, 0, 0], [0, 2, 0, 2], [0, 0, 0, 0]] as const)
+
+/** One hop: crouch, rise, hang, land. Six frames. */
+const HOP_DY = [0, -1, -2, -2, -1, 0] as const
+function hopPose(t: number, extra: Partial<Pose> = {}): Pose {
+  const air = t > 0 && t < 5
+  return pose({
+    dy: HOP_DY[t], squash: t === 0 || t === 5 ? 1 : t === 2 ? -1 : 0,
+    armL: air ? 'up' : 'out', armR: air ? 'up' : 'out', legs: air ? [1, 0, 0, 1] : [0, 0, 0, 0],
+    eyes: air ? 'happy' : 'open', ...extra,
+  })
+}
 
 export const WALK: Clip = {
   name: 'walk',
   len: 4,
-  frame: f => pose({ legs: legsStep(f), armL: f % 4 < 2 ? 'out' : 'down', armR: f % 4 < 2 ? 'down' : 'out', dy: 0 }),
+  frame: f => pose({ legs: legsStep(f), armL: f % 4 < 2 ? 'out' : 'down', armR: f % 4 < 2 ? 'down' : 'out' }),
 }
 
 export const CLIPS = {
   idle: [
     {
-      name: 'breathe', len: 40, weight: 3,
-      frame: (f, seed) => pose({ squash: f % 20 >= 14 && f % 20 < 18 ? 1 : 0, eyes: blinks(f, seed, 40) ? 'blink' : 'open' }),
+      name: 'breathe', len: 50, weight: 3,
+      frame: (f, seed) => pose({ squash: f % 25 >= 18 && f % 25 < 22 ? 1 : 0, eyes: blinks(f, seed, 50) ? 'blink' : 'open' }),
     },
     {
-      name: 'look-around', len: 40, weight: 2,
+      name: 'look-around', len: 50, weight: 2,
       frame: (f, seed) => pose({
-        lookX: f < 10 ? 0 : f < 20 ? -1 : f < 30 ? 1 : 0,
-        eyes: blinks(f, seed, 40) || f === 20 ? 'blink' : 'open',
-        lean: f >= 12 && f < 18 ? -1 : f >= 22 && f < 28 ? 1 : 0,
+        lookX: f < 12 ? 0 : f < 25 ? -1 : f < 38 ? 1 : 0,
+        eyes: blinks(f, seed, 50) || f === 25 ? 'blink' : 'open',
+        lean: f >= 15 && f < 22 ? -1 : f >= 28 && f < 35 ? 1 : 0,
       }),
     },
     {
-      name: 'hum', len: 36, weight: 1,
-      frame: f => pose({ eyes: 'closed', lean: cyc(Math.floor(f / 6), [0, 1, 0, -1]), props: f > 6 ? notes(f, 0, 18).slice(0, 1) : [] }),
+      name: 'hum', len: 48, weight: 1,
+      frame: f => pose({ eyes: 'closed', lean: cyc(Math.floor(f / 8), [0, 1, 0, -1]), props: f > 8 ? notes(f, 24).slice(0, 1) : [] }),
     },
     {
-      name: 'tap-foot', len: 30, weight: 1,
-      frame: (f, seed) => pose({ legs: [0, 0, 0, Math.floor(f / 3) % 2], eyes: blinks(f, seed, 30) ? 'blink' : 'open', lookX: 1 }),
+      name: 'tap-foot', len: 40, weight: 1,
+      frame: (f, seed) => pose({ legs: [0, 0, 0, Math.floor(f / 4) % 2], eyes: blinks(f, seed, 40) ? 'blink' : 'open', lookX: 1 }),
     },
     {
-      name: 'stretch', len: 30, weight: 1,
+      name: 'stretch', len: 40, weight: 1,
       frame: f => {
-        const up = f >= 6 && f < 20
-        return pose({ squash: up ? -1 : f >= 20 && f < 23 ? 1 : 0, armL: up ? 'high' : 'out', armR: up ? 'high' : 'out', eyes: up ? 'closed' : 'open' })
+        const up = f >= 8 && f < 26
+        return pose({ squash: up ? -1 : f >= 26 && f < 30 ? 1 : 0, armL: up ? 'high' : 'out', armR: up ? 'high' : 'out', eyes: up ? 'closed' : 'open' })
       },
+    },
+    {
+      name: 'groove', len: 32, weight: 2,
+      frame: f => pose({
+        lean: cyc(Math.floor(f / 4), [1, 0, -1, 0]), dy: f % 8 === 4 ? -1 : 0, eyes: f % 16 < 8 ? 'happy' : 'closed',
+        armL: f % 8 < 4 ? 'up' : 'out', armR: f % 8 < 4 ? 'out' : 'up', props: notes(f, 16).slice(0, 1),
+      }),
+    },
+    {
+      name: 'bunny-hops', len: 30, weight: 1,
+      frame: f => (f < 12 ? hopPose(f % 6) : pose({ eyes: f < 18 ? 'happy' : 'open' })),
+    },
+  ],
+  notes: [
+    {
+      name: 'scribble', len: 40, weight: 3,
+      frame: (f, seed) => pose({
+        notepad: cyc(Math.floor(f / 2), [0, 1, 2, 1] as const), armR: 'hidden',
+        eyes: blinks(f, seed, 40) ? 'blink' : 'open', lookX: 1, lookY: 1,
+        dy: f % 20 === 10 ? 1 : 0,
+      }),
+    },
+    {
+      name: 'peek', len: 40, weight: 2,
+      frame: f => {
+        const look = f < 20
+        return pose({
+          notepad: look ? 0 : cyc(Math.floor(f / 2), [0, 1, 2, 1] as const), armR: 'hidden',
+          eyes: f === 8 || f === 30 ? 'blink' : 'open', lookX: look ? -1 : 1, lookY: 1,
+          props: look && f > 4 ? [{ s: SPRITES.thinkS, x: -2, y: 1 }] : [],
+        })
+      },
+    },
+    {
+      name: 'nod', len: 30, weight: 1,
+      frame: f => pose({
+        notepad: 1, armR: 'hidden', lookY: 1,
+        dy: cyc(Math.floor(f / 3), [0, 1, 0, 0, 0]), eyes: f >= 20 ? 'happy' : 'open',
+      }),
     },
   ],
   sleepy: [
@@ -386,8 +444,8 @@ export const CLIPS = {
       frame: f => {
         const zs: Prop[] = []
         const t = f % 40
-        if (t >= 4) zs.push({ s: SPRITES.z, x: 13, y: Math.max(-2, 1 - Math.floor((t - 4) / 8)) })
-        if (t >= 20) zs.push({ s: SPRITES.Z, x: 16, y: Math.max(-3, 0 - Math.floor((t - 20) / 8)) })
+        if (t >= 4) zs.push({ s: SPRITES.z, x: 13, y: Math.max(-2, 2 - Math.floor((t - 4) / 8)) })
+        if (t >= 20) zs.push({ s: SPRITES.Z, x: 16, y: Math.max(-2, 1 - Math.floor((t - 20) / 8)) })
         return pose({ eyes: 'blink', squash: t % 20 < 10 ? 0 : 1, armL: 'down', armR: 'down', props: zs })
       },
     },
@@ -397,39 +455,35 @@ export const CLIPS = {
       name: 'wave', len: 24,
       frame: f => pose({
         eyes: 'happy', armL: 'out', armR: cyc(Math.floor(f / 3), ['up', 'high'] as const), blush: true,
-        props: f % 6 < 3 ? [{ s: SPRITES.spark, x: 15, y: -3 }] : [{ s: SPRITES.dot, x: 16, y: -2 }],
+        props: f % 6 < 3 ? [{ s: SPRITES.spark, x: 15, y: -2 }] : [{ s: SPRITES.dot, x: 16, y: -1 }],
       }),
     },
   ],
   excited: [
     {
-      name: 'hop', len: 12,
-      frame: f => pose({
-        dy: cyc(f, [0, 0, -1, -2, -2, -1, 0, 0, 0, 0, 0, 0]),
-        squash: f < 2 || f === 6 ? 1 : 0,
-        eyes: 'wide',
-        armL: f >= 2 && f <= 5 ? 'high' : 'out', armR: f >= 2 && f <= 5 ? 'high' : 'out',
-        props: [{ s: SPRITES.bang, x: 14, y: -3 + (f % 4 < 2 ? 0 : 1) }],
-      }),
+      name: 'hop', len: 15,
+      frame: f => {
+        const t = Math.min(f, 5)
+        return hopPose(t, { eyes: 'wide', armL: t > 0 && t < 5 ? 'high' : 'out', armR: t > 0 && t < 5 ? 'high' : 'out', props: [{ s: SPRITES.bang, x: 14, y: -2 + (f % 4 < 2 ? 0 : 1) }] })
+      },
     },
   ],
   thinking: [
     {
       name: 'ponder', len: 30, weight: 2,
       frame: f => {
-        const t = f % 30
         const dots: Prop[] = []
-        if (t >= 4) dots.push({ s: SPRITES.thinkS, x: 13, y: 0 })
-        if (t >= 10) dots.push({ s: SPRITES.thinkM, x: 15, y: -2 })
-        if (t >= 16) dots.push({ s: SPRITES.thinkL, x: 17, y: -5 })
-        return pose({ eyes: t === 26 ? 'blink' : 'open', lookX: 1, lookY: -1, armR: 'up', props: dots })
+        if (f >= 4) dots.push({ s: SPRITES.thinkS, x: 13, y: 1 })
+        if (f >= 10) dots.push({ s: SPRITES.thinkM, x: 15, y: -1 })
+        if (f >= 16) dots.push({ s: SPRITES.thinkL, x: 17, y: -2 })
+        return pose({ eyes: f === 26 ? 'blink' : 'open', lookX: 1, lookY: -1, armR: 'up', props: dots })
       },
     },
     {
       name: 'hmm', len: 30, weight: 1,
       frame: f => pose({
-        eyes: f % 30 < 15 ? 'open' : 'closed', lookX: -1, lookY: -1, lean: cyc(Math.floor(f / 5), [0, -1, 0, 1]),
-        props: f % 30 >= 6 ? [{ s: SPRITES.ask, x: 14, y: -3 + (f % 10 < 5 ? 0 : 1) }] : [],
+        eyes: f < 15 ? 'open' : 'closed', lookX: -1, lookY: -1, lean: cyc(Math.floor(f / 5), [0, -1, 0, 1]),
+        props: f >= 6 ? [{ s: SPRITES.ask, x: 14, y: -2 + (f % 10 < 5 ? 0 : 1) }] : [],
       }),
     },
     {
@@ -439,7 +493,7 @@ export const CLIPS = {
         return pose({
           eyes: lit ? 'star' : 'open', lookY: lit ? 0 : -1, dy: f === 12 || f === 13 ? -1 : 0,
           armR: lit ? 'high' : 'up',
-          props: lit ? [{ s: SPRITES.spark, x: 15, y: -3 + (f % 4 < 2 ? 0 : 1) }] : [{ s: SPRITES.thinkS, x: 13, y: 0 }],
+          props: lit ? [{ s: SPRITES.spark, x: 15, y: -2 + (f % 4 < 2 ? 0 : 1) }] : [{ s: SPRITES.thinkS, x: 13, y: 1 }],
         })
       },
     },
@@ -453,7 +507,7 @@ export const CLIPS = {
           eyes: found ? 'wide' : 'open', lookX: found ? 1 : cyc(Math.floor(f / 4), [-1, 0, 1, 0]), lookY: 1,
           armR: 'up', props: [
             { s: SPRITES.magnifier, x: 13, y: -2 + (f % 8 < 4 ? 0 : 1) },
-            ...(found ? [{ s: SPRITES.spark, x: 17, y: -3 }] : []),
+            ...(found ? [{ s: SPRITES.spark, x: 17, y: -2 }] : []),
           ],
         })
       },
@@ -467,7 +521,7 @@ export const CLIPS = {
         for (let k = 0; k < 3; k++) {
           const t = (f + k * 4) % 12
           const s = [SPRITES.code1, SPRITES.code2, SPRITES.code3][k]
-          sparks.push({ s, x: [-3, 6, 14][k] + (t % 4 < 2 ? 0 : 1), y: -1 - Math.floor(t / 3) })
+          sparks.push({ s, x: [-3, 6, 14][k] + (t % 4 < 2 ? 0 : 1), y: 1 - Math.floor(t / 4) })
         }
         return pose({ eyes: f === 20 ? 'blink' : 'open', lookY: 1, laptop: (f % 2) as 0 | 1, armL: 'hidden', armR: 'hidden', props: sparks })
       },
@@ -491,7 +545,7 @@ export const CLIPS = {
           { s: SPRITES.dash, x: -5 - (f % 2), y: 3 },
           { s: SPRITES.dash, x: -6 + (f % 2), y: 6 },
         ],
-        props: [{ s: f % 4 < 2 ? SPRITES.prompt : SPRITES.promptOff, x: 14, y: -3 }],
+        props: [{ s: f % 4 < 2 ? SPRITES.prompt : SPRITES.promptOff, x: 14, y: -2 }],
       }),
     },
   ],
@@ -503,9 +557,9 @@ export const CLIPS = {
         return pose({
           eyes: 'happy', dy: a ? 0 : -1, armL: a ? 'out' : 'high', armR: a ? 'high' : 'out',
           props: [
-            { s: a ? SPRITES.mini : SPRITES.miniHop, x: -20, y: a ? 4 : 3 },
-            { s: a ? SPRITES.miniHop : SPRITES.miniHappy, x: -10, y: a ? 3 : 4 },
-            ...notes(f, 0, 8).slice(0, 1),
+            { s: a ? SPRITES.mini : SPRITES.miniHop, x: -20, y: a ? 5 : 4 },
+            { s: a ? SPRITES.miniHop : SPRITES.miniHappy, x: -10, y: a ? 4 : 5 },
+            ...notes(f, 8).slice(0, 1),
           ],
         })
       },
@@ -519,17 +573,17 @@ export const CLIPS = {
         return pose({
           eyes: f === 12 ? 'blink' : 'open', dy: f % 8 === 0 ? -1 : 0,
           armL: a ? 'high' : 'up', armR: a ? 'up' : 'high',
-          props: [{ s: SPRITES.ask, x: 15, y: -3 + (f % 8 < 4 ? 0 : 1) }],
+          props: [{ s: SPRITES.ask, x: 15, y: -2 + (f % 8 < 4 ? 0 : 1) }],
         })
       },
     },
   ],
   oops: [
     {
-      name: 'eek', len: 24,
+      name: 'eek', len: 30,
       frame: f => pose({
         dx: f < 6 ? cyc(f, [-1, 1]) : 0,
-        eyes: f < 8 ? 'dizzy' : 'sad', armL: 'down', armR: f < 8 ? 'high' : 'up',
+        eyes: f < 10 ? 'dizzy' : 'sad', armL: 'down', armR: f < 10 ? 'high' : 'up',
         props: f >= 6 ? [{ s: SPRITES.sweat, x: 12, y: Math.min(3, -1 + Math.floor((f - 6) / 3)) }] : [],
       }),
     },
@@ -544,9 +598,9 @@ export const CLIPS = {
           legs: stomp ? [1, 1, 0, 0] : [0, 0, 1, 1], dy: f % 4 === 1 ? -1 : 0, squash: f % 4 === 2 ? 1 : 0,
           armL: 'down', armR: 'down',
           props: [
-            { s: f % 4 < 2 ? SPRITES.vein : SPRITES.smallVein, x: f % 4 < 2 ? 10 : 11, y: -3 },
-            { s: SPRITES.puff, x: -3 - Math.floor((f % 8) / 4), y: -1 - Math.floor((f % 8) / 3) },
-            { s: SPRITES.puffSmall, x: 14 + Math.floor((f % 8) / 4), y: -1 - Math.floor((f % 8) / 3) },
+            { s: f % 4 < 2 ? SPRITES.vein : SPRITES.smallVein, x: f % 4 < 2 ? 11 : 12, y: -2 },
+            { s: SPRITES.puff, x: -3 - Math.floor((f % 8) / 4), y: -1 - Math.floor((f % 8) / 4) },
+            { s: SPRITES.puffSmall, x: 15 + Math.floor((f % 8) / 4), y: 1 - Math.floor((f % 8) / 3) },
           ],
         })
       },
@@ -556,7 +610,7 @@ export const CLIPS = {
       frame: f => pose({
         eyes: 'angry', tint: PALETTE.angry, dx: f % 2 ? 1 : 0,
         armL: f % 4 < 2 ? 'high' : 'up', armR: f % 4 < 2 ? 'up' : 'high',
-        props: [{ s: SPRITES.vein, x: 11, y: -3 }],
+        props: [{ s: SPRITES.vein, x: 12, y: -2 }],
       }),
     },
   ],
@@ -569,15 +623,43 @@ export const CLIPS = {
       }),
     },
   ],
+  happy: [
+    {
+      name: 'happy-feet', len: 16, weight: 2,
+      frame: f => pose({
+        legs: cyc(Math.floor(f / 2), [[2, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 2], [0, 0, 0, 0]] as const),
+        dy: f % 4 === 1 ? -1 : 0, eyes: 'happy', blush: true, lean: cyc(Math.floor(f / 4), [-1, 1]),
+        armL: f % 8 < 4 ? 'high' : 'up', armR: f % 8 < 4 ? 'up' : 'high', props: notes(f, 8),
+      }),
+    },
+    {
+      name: 'cheer', len: 16, weight: 2,
+      frame: f => {
+        const up = f % 4 < 2
+        return pose({
+          dy: up ? -2 : 0, squash: up ? -1 : 1, eyes: up ? 'star' : 'happy',
+          armL: up ? 'high' : 'down', armR: up ? 'high' : 'down', legs: up ? [1, 0, 0, 1] : [0, 0, 0, 0],
+          props: up ? [{ s: SPRITES.spark, x: -5, y: -2 }, { s: SPRITES.spark, x: 15, y: -2 }] : [{ s: SPRITES.dot, x: -4, y: 0 }, { s: SPRITES.dot, x: 16, y: 0 }],
+        })
+      },
+    },
+    {
+      name: 'sway', len: 24, weight: 1,
+      frame: f => pose({
+        lean: cyc(Math.floor(f / 3), [0, 1, 1, 0, -1, -1]), dx: cyc(Math.floor(f / 6), [0, 1, 0, -1]),
+        eyes: 'closed', blush: true, armL: 'up', armR: 'up', props: notes(f, 12),
+      }),
+    },
+  ],
   dance: [
     {
       name: 'bounce', len: 16,
       frame: f => {
-        const dy = cyc(f, [0, -1, -2, -3, -2, -1, 0, 0])
+        const dy = cyc(f, [0, -1, -2, -2, -2, -1, 0, 0])
         return pose({
           dy, squash: f % 8 === 6 ? 1 : f % 8 === 1 ? -1 : 0, eyes: 'happy',
           armL: dy <= -2 ? 'high' : 'out', armR: dy <= -2 ? 'high' : 'out',
-          props: notes(f, 0, 8),
+          props: notes(f, 8),
         })
       },
     },
@@ -589,7 +671,7 @@ export const CLIPS = {
         return pose({
           dx, lean: going, lookX: going, eyes: f % 8 === 0 ? 'happy' : 'open',
           legs: legsStep(f), armL: f % 4 < 2 ? 'up' : 'out', armR: f % 4 < 2 ? 'out' : 'up',
-          props: notes(f, 0, 12),
+          props: notes(f, 12),
         })
       },
     },
@@ -601,7 +683,7 @@ export const CLIPS = {
           dx: right ? 1 : -1, lean: right ? 1 : -1,
           armR: right ? 'high' : 'down', armL: right ? 'down' : 'high',
           eyes: f % 8 < 4 ? 'star' : 'happy', legs: right ? [0, 0, 1, 0] : [0, 1, 0, 0],
-          props: [{ s: SPRITES.spark, x: right ? 16 : -6, y: -3 + (f % 4 < 2 ? 0 : 1) }, ...(f % 8 >= 4 ? [{ s: SPRITES.dot, x: right ? 19 : -8, y: 1 }] : [])],
+          props: [{ s: SPRITES.spark, x: right ? 16 : -6, y: -2 + (f % 4 < 2 ? 0 : 1) }, ...(f % 8 >= 4 ? [{ s: SPRITES.dot, x: right ? 19 : -8, y: 1 }] : [])],
         })
       },
     },
@@ -609,11 +691,10 @@ export const CLIPS = {
       name: 'spin', len: 16,
       frame: f => {
         const facing = cyc(f, ['front', 'front', 'side', 'side', 'back', 'back', 'back', 'side', 'side', 'front', 'front', 'front', 'front', 'front', 'front', 'front'] as const)
-        const dir = f < 4 ? 1 : -1
         return pose({
-          facing, dir, dy: f >= 2 && f <= 8 ? -1 : 0, squash: f === 10 ? 1 : 0,
+          facing, dir: f < 4 ? 1 : -1, dy: f >= 2 && f <= 8 ? -1 : 0, squash: f === 10 ? 1 : 0,
           eyes: f >= 10 ? 'happy' : 'open', armL: f >= 11 ? 'high' : 'out', armR: f >= 11 ? 'high' : 'out',
-          props: f >= 11 ? [{ s: SPRITES.spark, x: -5, y: -2 }, { s: SPRITES.spark, x: 15, y: -3 }] : [],
+          props: f >= 11 ? [{ s: SPRITES.spark, x: -5, y: -2 }, { s: SPRITES.spark, x: 15, y: -2 }] : [],
         })
       },
     },
@@ -622,7 +703,7 @@ export const CLIPS = {
       frame: f => pose({
         squash: cyc(f, [0, 1, 0, -1] as const), lean: cyc(Math.floor(f / 2), [1, 0, -1, 0]),
         eyes: 'closed', blush: true, armL: f % 4 < 2 ? 'up' : 'out', armR: f % 4 < 2 ? 'out' : 'up',
-        props: notes(f, 0, 8),
+        props: notes(f, 8),
       }),
     },
     {
@@ -633,7 +714,28 @@ export const CLIPS = {
         return pose({
           armL: arms[0], armR: arms[1], dx: cyc(beat, [0, 1, 0, -1]), eyes: f % 4 === 0 ? 'wide' : 'open',
           lookX: cyc(beat, [1, -1, 0, 0]), legs: beat % 2 ? [0, 0, 0, 1] : [1, 0, 0, 0],
-          props: f % 4 < 2 ? [{ s: SPRITES.note2, x: 15, y: -3 }] : [],
+          props: f % 4 < 2 ? [{ s: SPRITES.note2, x: 15, y: -2 }] : [],
+        })
+      },
+    },
+    {
+      name: 'side-hops', len: 24,
+      frame: f => {
+        const hop = Math.floor(f / 6)
+        const t = f % 6
+        const xs = [0, -6, 0, 6, 0]
+        const dx = Math.round(xs[hop] + ((xs[hop + 1] - xs[hop]) * t) / 5)
+        return hopPose(t, { dx, lookX: Math.sign(xs[hop + 1] - xs[hop]), props: t === 5 ? [{ s: SPRITES.dot, x: dx + (hop % 2 ? 13 : -2), y: 7 }] : [] })
+      },
+    },
+    {
+      name: 'conga', len: 24,
+      frame: f => {
+        const step = Math.floor(f / 3)
+        return pose({
+          dx: cyc(step, [0, 1, 2, 3, 2, 1, 0, -1]), legs: legsStep(f), lean: cyc(step, [1, 1, 1, 0, -1, -1, -1, 0]),
+          eyes: step % 4 === 3 ? 'star' : 'happy', armL: step % 2 ? 'up' : 'high', armR: step % 2 ? 'high' : 'up',
+          props: [...notes(f, 8), { s: SPRITES.mini, x: -12 + cyc(step, [0, 1, 2, 3, 2, 1, 0, -1]), y: f % 6 < 3 ? 5 : 4 }],
         })
       },
     },
@@ -646,7 +748,7 @@ export const MOODS = Object.keys(CLIPS) as Mood[]
 
 /** How a mood gets around the stage. */
 const MOVE: Record<Mood, 'home' | 'pace' | 'stay'> = {
-  idle: 'home', sleepy: 'home', hello: 'home', excited: 'stay', thinking: 'pace',
+  happy: 'stay', idle: 'home', sleepy: 'home', hello: 'home', notes: 'stay', excited: 'stay', thinking: 'pace',
   reading: 'stay', coding: 'stay', running: 'stay', friends: 'stay', asking: 'stay',
   oops: 'stay', angry: 'stay', love: 'stay', dance: 'stay',
 }
@@ -664,26 +766,53 @@ export function pickClip(mood: Mood, r: number, not?: string): Clip {
 
 /** Frames of quiet before an idle Clawd nods off. */
 const SLEEP_AFTER = FPS * 150
+/** The least a mood stays on screen before the next one takes over. */
+const MIN_HOLD = FPS * 3
+/** The least an emote plays before another emote may cut in. */
+const MIN_EMOTE = FPS * 2
+/** How long Clawd keeps taking notes after the last keystroke. */
+const TYPING_GRACE = FPS * 3
+
+type Gait = 'walk' | 'hop'
 
 /**
  * The band Clawd lives in: where it stands, which mood it is in, which clip
  * of that mood it is playing. `tick()` advances one frame and draws it.
+ *
+ * Moods are sticky: a new base mood waits until the current one has been on
+ * screen for MIN_HOLD, and an emote waits for the one playing to have had
+ * MIN_EMOTE, so a burst of quick tool calls doesn't make Clawd flicker.
  */
 export class Stage {
   width: number
   pos: number
   dir: 1 | -1 = -1
+  /** The mood the events last asked for. */
   base: Mood = 'idle'
+  /** The base mood on screen; catches up with `base` after MIN_HOLD. */
+  shownBase: Mood = 'idle'
   emote: Mood | null = null
   emoteLeft = 0
+  queued: { mood: Mood; frames: number } | null = null
   clip: Clip
   f = 0
   seed: number
   n = 0
+  /** Frames the current mood has been on screen. */
+  held = 0
   quiet = 0
+  typingLeft = 0
   pause = 0
   target: number | null = null
+  gait: Gait = 'walk'
+  hopT = 0
   pinned: number | null = null
+  /** Where an idle Clawd has wandered off to, how long it stays, when it next goes. */
+  spot: number | null = null
+  stayLeft = 0
+  wanderIn = FPS * 25
+  /** When an idle Clawd next breaks into a little dance for no reason. */
+  danceIn = FPS * 40
 
   constructor(width: number, seed = 1) {
     this.width = width
@@ -694,8 +823,8 @@ export class Stage {
 
   get mood(): Mood {
     if (this.emote) return this.emote
-    if (this.base === 'idle' && this.quiet > SLEEP_AFTER) return 'sleepy'
-    return this.base
+    if (this.shownBase === 'idle' && this.quiet > SLEEP_AFTER) return 'sleepy'
+    return this.shownBase
   }
 
   /** Clawd's resting spot: the right-hand side, room left for arms and props. */
@@ -706,6 +835,7 @@ export class Stage {
   resize(width: number): void {
     this.width = width
     this.pos = Math.min(this.pos, Math.max(0, width - 14))
+    if (this.spot !== null) this.spot = Math.min(this.spot, Math.max(2, width - 16))
   }
 
   /** Walks in from the left edge. */
@@ -715,24 +845,38 @@ export class Stage {
   }
 
   setBase(mood: Mood): void {
-    if (mood === this.base) return
-    const was = this.mood
     this.base = mood
-    this.quiet = 0
-    if (this.mood !== was) this.restart()
+    if (mood !== 'idle') this.quiet = 0
   }
 
   /** Plays a mood for a while, then goes back to the base mood. */
   play(mood: Mood, frames: number): void {
-    this.emote = mood
-    this.emoteLeft = frames
     this.quiet = 0
-    this.restart()
+    if (this.emote && this.held < MIN_EMOTE) {
+      this.queued = { mood, frames }
+      return
+    }
+    this.startEmote(mood, frames)
   }
 
   clearEmote(): void {
     if (!this.emote) return
     this.emote = null
+    this.queued = null
+    this.restart()
+  }
+
+  /** The person is typing: Clawd takes notes while nothing else is going on. */
+  typing(): void {
+    this.typingLeft = TYPING_GRACE
+    this.quiet = 0
+    if (this.base === 'idle') this.setBase('notes')
+  }
+
+  private startEmote(mood: Mood, frames: number): void {
+    this.emote = mood
+    this.emoteLeft = frames
+    this.queued = null
     this.restart()
   }
 
@@ -744,26 +888,65 @@ export class Stage {
     this.clip = pickClip(this.mood, this.rand())
     this.f = 0
     this.pause = 0
+    this.held = 0
     this.target = null
+  }
+
+  /** Where an idle Clawd wants to be: home, or a spot it hopped or strolled to. */
+  private idleTarget(): number {
+    if (this.spot !== null) {
+      if (Math.abs(this.pos - this.spot) < 0.5 && --this.stayLeft <= 0) {
+        this.spot = null
+        this.gait = 'walk'
+      }
+    } else if (Math.abs(this.pos - this.home) < 0.5 && this.pinned === null && --this.wanderIn <= 0) {
+      this.wanderIn = FPS * (20 + Math.floor(this.rand() * 30))
+      const room = this.width - 16
+      if (room > 30) {
+        let to = 2 + Math.floor(this.rand() * (room - 2))
+        if (Math.abs(to - this.home) < 14) to = Math.max(2, this.home - 14 - Math.floor(this.rand() * 10))
+        this.spot = to
+        this.stayLeft = FPS * (6 + Math.floor(this.rand() * 8))
+        this.gait = this.rand() < 0.5 ? 'hop' : 'walk'
+      }
+    }
+    return this.spot ?? this.home
   }
 
   /** Advances one frame and returns it. */
   tick(): Canvas {
+    // moods catch up, never faster than MIN_HOLD
+    this.held++
+    if (this.typingLeft > 0 && --this.typingLeft === 0 && this.base === 'notes') this.setBase('idle')
+    if (!this.emote && this.base !== this.shownBase && this.held >= MIN_HOLD) {
+      this.shownBase = this.base
+      this.restart()
+    } else if (this.emote && this.base !== this.shownBase) {
+      this.shownBase = this.base // the emote covers the switch
+    }
+
     const mood = this.mood
     const offstage = this.pos < 0 || this.pos > this.width - 14
     const move = offstage ? 'home' : MOVE[mood]
-    let p: Pose
+    let p: Pose | undefined
 
-    const walkTo = (x: number, decor?: (f: number) => Partial<Pose>): boolean => {
+    const travel = (x: number, decor?: (f: number) => Partial<Pose>): boolean => {
       const d = x - this.pos
-      if (Math.abs(d) < 0.5) {
+      if (Math.abs(d) < 0.5 && this.hopT === 0) {
         this.pos = x
         return false
       }
-      this.dir = d > 0 ? 1 : -1
-      this.pos += this.dir * 0.5
+      this.dir = d > 0 ? 1 : d < 0 ? -1 : this.dir
+      if (this.gait === 'hop' && !offstage) {
+        const t = this.hopT
+        if (t > 0 && t < 5) this.pos += this.dir * Math.min(1.5, Math.abs(d))
+        this.hopT = (t + 1) % 6
+        p = hopPose(t, { lookX: this.dir, ...decor?.(this.f) })
+      } else {
+        this.pos += this.dir * Math.min(0.5, Math.abs(d))
+        p = { ...WALK.frame(this.f, this.seed), lookX: this.dir, ...decor?.(this.f) }
+      }
       this.f++
-      p = { ...WALK.frame(this.f, this.seed), lookX: this.dir, ...decor?.(this.f) }
       return true
     }
 
@@ -777,8 +960,8 @@ export class Stage {
       }
     }
 
-    if (move === 'home' && walkTo(this.home)) {
-      // walking home
+    if (move === 'home' && travel(mood === 'idle' && !offstage ? this.idleTarget() : this.home)) {
+      // on the way
     } else if (move === 'pace') {
       if (this.pause > 0) {
         this.pause--
@@ -787,25 +970,35 @@ export class Stage {
         if (this.target === null) {
           const far = Math.max(2, this.home - Math.min(48, Math.floor(this.width * 0.45)))
           this.target = this.pos > (far + this.home) / 2 ? far : this.home
+          this.gait = this.rand() < 0.3 ? 'hop' : 'walk'
         }
-        const thought = (f: number): Partial<Pose> => ({ lookY: -1, props: [{ s: SPRITES.thinkS, x: 13, y: 0 }, ...(f % 8 < 4 ? [] : [{ s: SPRITES.thinkM, x: 15, y: -3 }])] })
-        if (!walkTo(this.target, thought)) {
+        const thought = (f: number): Partial<Pose> => ({ lookY: -1, props: [{ s: SPRITES.thinkS, x: 13, y: 1 }, ...(f % 8 < 4 ? [] : [{ s: SPRITES.thinkM, x: 15, y: -1 }])] })
+        if (!travel(this.target, thought)) {
           this.target = null
-          this.pause = FPS * 2 + Math.floor(this.rand() * FPS * 3)
+          this.pause = FPS * 3 + Math.floor(this.rand() * FPS * 3)
           this.clip = pickClip('thinking', this.rand())
           this.f = 0
           playClip()
         }
       }
     } else {
+      this.hopT = 0
       playClip()
     }
 
     if (this.emote && --this.emoteLeft <= 0) {
+      const next = this.queued
       this.emote = null
-      this.restart()
+      if (next) this.startEmote(next.mood, next.frames)
+      else this.restart()
+    } else if (this.emote && this.queued && this.held >= MIN_EMOTE) {
+      this.startEmote(this.queued.mood, this.queued.frames)
     }
-    if (this.base === 'idle' && !this.emote) {
+    if (this.mood === 'idle' && this.spot === null && --this.danceIn <= 0) {
+      this.danceIn = FPS * (30 + Math.floor(this.rand() * 40))
+      this.play(this.rand() < 0.6 ? 'happy' : 'dance', FPS * (4 + Math.floor(this.rand() * 3)))
+    }
+    if (this.shownBase === 'idle' && !this.emote) {
       const wasAwake = this.quiet <= SLEEP_AFTER
       this.quiet++
       if (wasAwake && this.quiet > SLEEP_AFTER) this.restart()
@@ -831,6 +1024,94 @@ export function clipFrames(clip: Clip, width: number, seed = 1): Canvas[] {
 
 // ---------------------------------------------------------------- encoders
 
+/** How pixels become cells: two stacked per cell, or 2x4 as quarter-blocks. */
+export type Encoding = 'half' | 'quad'
+
+/** A size, as the plugin and the CLI offer it. */
+export type Size = 'tiny' | 'small' | 'big'
+
+export const SIZES: Record<Size, { encoding: Encoding; scale: number; pxPerColumn: number }> = {
+  tiny: { encoding: 'quad', scale: 1, pxPerColumn: 2 },
+  small: { encoding: 'half', scale: 1, pxPerColumn: 1 },
+  big: { encoding: 'half', scale: 2, pxPerColumn: 0.5 },
+}
+
+/** Stage width in base pixels for a band of `columns` at a size. */
+export function stageWidth(columns: number, size: Size): number {
+  return Math.floor(columns * SIZES[size].pxPerColumn)
+}
+
+const DEFAULT = 0x01000000
+
+type Cells = { columns: number; rows: number; ch: Uint32Array; fg: Uint32Array; bg: Uint32Array }
+
+function halfCells(cv: Canvas): Cells {
+  const rows = Math.ceil(cv.h / 2)
+  const n = cv.w * rows
+  const out: Cells = { columns: cv.w, rows, ch: new Uint32Array(n), fg: new Uint32Array(n), bg: new Uint32Array(n) }
+  for (let r = 0; r < rows; r++) {
+    for (let x = 0; x < cv.w; x++) {
+      const i = r * cv.w + x
+      const t = cv.get(x, r * 2)
+      const b = cv.get(x, r * 2 + 1)
+      if (t) [out.ch[i], out.fg[i], out.bg[i]] = [0x2580, t, b || DEFAULT]
+      else if (b) [out.ch[i], out.fg[i], out.bg[i]] = [0x2584, b, DEFAULT]
+      else [out.ch[i], out.fg[i], out.bg[i]] = [0x20, DEFAULT, DEFAULT]
+    }
+  }
+  return out
+}
+
+// Quarter-blocks by mask: top-left 1, top-right 2, bottom-left 4, bottom-right 8.
+const QUADS = [0x20, 0x2598, 0x259d, 0x2580, 0x2596, 0x258c, 0x259e, 0x259b, 0x2597, 0x259a, 0x2590, 0x259c, 0x2584, 0x2599, 0x259f, 0x2588]
+
+/** Two stacked pixels as one: a detail (eye, prop) wins over the body, anything over nothing. */
+function squeeze(a: Color, b: Color): Color {
+  if (!a) return b
+  if (!b) return a
+  return SKIN.has(a) ? b : a
+}
+
+function quadCells(cv: Canvas): Cells {
+  const columns = Math.ceil(cv.w / 2)
+  const rows = Math.ceil(cv.h / 4)
+  const n = columns * rows
+  const out: Cells = { columns, rows, ch: new Uint32Array(n), fg: new Uint32Array(n), bg: new Uint32Array(n) }
+  const sub = [0, 0, 0, 0]
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < columns; c++) {
+      for (let k = 0; k < 4; k++) {
+        const x = c * 2 + (k & 1)
+        const y = r * 4 + (k >> 1) * 2
+        sub[k] = squeeze(cv.get(x, y), cv.get(x, y + 1))
+      }
+      // the commonest colour is the glyph, the next the background
+      const counts = new Map<Color, number>()
+      for (const s of sub) if (s) counts.set(s, (counts.get(s) ?? 0) + 1)
+      const ranked = [...counts].sort((a, b) => b[1] - a[1] || (SKIN.has(a[0]) ? 1 : -1))
+      const i = r * columns + c
+      if (ranked.length === 0) {
+        [out.ch[i], out.fg[i], out.bg[i]] = [0x20, DEFAULT, DEFAULT]
+        continue
+      }
+      const fg = ranked[0][0]
+      const hasGap = sub.some(s => !s)
+      const bg = !hasGap && ranked.length > 1 ? ranked[1][0] : DEFAULT
+      let mask = 0
+      sub.forEach((s, k) => {
+        if (s === fg || (s && s !== bg && !hasGap)) mask |= 1 << k
+      })
+      if (mask === 15 && bg !== DEFAULT) mask = sub.reduce((m, s, k) => (s === fg ? m | (1 << k) : m), 0)
+      ;[out.ch[i], out.fg[i], out.bg[i]] = [QUADS[mask], fg, bg]
+    }
+  }
+  return out
+}
+
+export function cellsOf(cv: Canvas, encoding: Encoding): Cells {
+  return encoding === 'quad' ? quadCells(cv) : halfCells(cv)
+}
+
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 
 export function base64(bytes: Uint8Array): string {
@@ -851,54 +1132,34 @@ export function base64(bytes: Uint8Array): string {
   return out
 }
 
-const DEFAULT = 0x01000000
-const UPPER = 0x2580 // ▀
-const LOWER = 0x2584 // ▄
-
-/** Packs a canvas as Raster cells: one cell per column and pixel pair. */
-export function rasterCells(cv: Canvas): { columns: number; rows: number; cells: string } {
-  const rows = Math.ceil(cv.h / 2)
-  const words = new Uint32Array(cv.w * rows * 3)
-  let k = 0
-  for (let r = 0; r < rows; r++) {
-    for (let x = 0; x < cv.w; x++) {
-      const t = cv.get(x, r * 2)
-      const b = cv.get(x, r * 2 + 1)
-      if (t && b) {
-        words[k++] = UPPER; words[k++] = t; words[k++] = b
-      } else if (t) {
-        words[k++] = UPPER; words[k++] = t; words[k++] = DEFAULT
-      } else if (b) {
-        words[k++] = LOWER; words[k++] = b; words[k++] = DEFAULT
-      } else {
-        words[k++] = 0x20; words[k++] = DEFAULT; words[k++] = DEFAULT
-      }
-    }
+/** Packs a canvas as Raster cells (RasterProps). */
+export function rasterCells(cv: Canvas, encoding: Encoding = 'half'): { columns: number; rows: number; cells: string } {
+  const c = cellsOf(cv, encoding)
+  const words = new Uint32Array(c.ch.length * 3)
+  for (let i = 0; i < c.ch.length; i++) {
+    words[i * 3] = c.ch[i]
+    words[i * 3 + 1] = c.fg[i]
+    words[i * 3 + 2] = c.bg[i]
   }
-  return { columns: cv.w, rows, cells: base64(new Uint8Array(words.buffer)) }
+  return { columns: c.columns, rows: c.rows, cells: base64(new Uint8Array(words.buffer)) }
 }
 
-const fg = (c: Color) => `\x1b[38;2;${(c >> 16) & 255};${(c >> 8) & 255};${c & 255}m`
-const bg = (c: Color) => `\x1b[48;2;${(c >> 16) & 255};${(c >> 8) & 255};${c & 255}m`
+const sgr = (c: Color, layer: 38 | 48) =>
+  c === DEFAULT ? `\x1b[${layer + 1}m` : `\x1b[${layer};2;${(c >> 16) & 255};${(c >> 8) & 255};${c & 255}m`
 
-/** A canvas as truecolor ANSI lines, half-blocks two pixels to a cell. */
-export function ansiLines(cv: Canvas): string[] {
+/** A canvas as truecolor ANSI lines. */
+export function ansiLines(cv: Canvas, encoding: Encoding = 'half'): string[] {
+  const c = cellsOf(cv, encoding)
   const lines: string[] = []
-  for (let r = 0; r < Math.ceil(cv.h / 2); r++) {
+  for (let r = 0; r < c.rows; r++) {
     let line = ''
     let last = ''
-    for (let x = 0; x < cv.w; x++) {
-      const t = cv.get(x, r * 2)
-      const b = cv.get(x, r * 2 + 1)
-      let style: string
-      let ch: string
-      if (t && b) { style = fg(t) + bg(b); ch = '▀' }
-      else if (t) { style = '\x1b[0m' + fg(t); ch = '▀' }
-      else if (b) { style = '\x1b[0m' + fg(b); ch = '▄' }
-      else { style = '\x1b[0m'; ch = ' ' }
+    for (let x = 0; x < c.columns; x++) {
+      const i = r * c.columns + x
+      const style = c.ch[i] === 0x20 ? '\x1b[0m' : sgr(c.fg[i], 38) + sgr(c.bg[i], 48)
       if (style !== last) line += style
       last = style
-      line += ch
+      line += String.fromCharCode(c.ch[i])
     }
     lines.push(line + '\x1b[0m')
   }

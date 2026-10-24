@@ -13,12 +13,13 @@ const picks: [Mood, string, number][] = [
   ['idle', 'breathe', 0], ['hello', 'wave', 4], ['thinking', 'ponder', 20], ['reading', 'scan', 28],
   ['coding', 'type', 1], ['running', 'dash', 1], ['asking', 'wave-both', 3], ['love', 'smitten', 5],
   ['dance', 'bounce', 3], ['dance', 'disco', 2], ['dance', 'spin', 13], ['angry', 'stomp', 0],
-  ['oops', 'eek', 2], ['sleepy', 'snooze', 30], ['excited', 'hop', 3], ['coding', 'proud', 2],
+  ['oops', 'eek', 2], ['sleepy', 'snooze', 30], ['excited', 'hop', 3], ['happy', 'cheer', 1],
 ]
 
 const rows = Math.ceil(picks.length / COLS)
 const W = COLS * FW * SCALE
-const H = rows * STAGE_H * SCALE
+const TILE_H = STAGE_H + 4
+const H = rows * TILE_H * SCALE
 const img = Buffer.alloc(W * H * 3)
 for (let i = 0; i < img.length; i += 3) img.set(BG, i)
 
@@ -26,7 +27,7 @@ picks.forEach(([mood, name, f], i) => {
   const clip = CLIPS[mood].find(c => c.name === name)!
   const cv = clipFrames(clip, FW)[f]!
   const ox = (i % COLS) * FW * SCALE
-  const oy = Math.floor(i / COLS) * STAGE_H * SCALE
+  const oy = (Math.floor(i / COLS) * TILE_H + 3) * SCALE
   for (let y = 0; y < STAGE_H * SCALE; y++)
     for (let x = 0; x < FW * SCALE; x++) {
       const c = cv.get(Math.floor(x / SCALE), Math.floor(y / SCALE))

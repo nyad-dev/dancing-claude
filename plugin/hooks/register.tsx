@@ -2,11 +2,11 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { ClawdScene, ClawdSize } from '../types'
-import { CLIPS, FPS, MOODS, Stage, animatedSvg, clipFrames, rasterCells, upscale } from './clawd.ts'
+import { CLIPS, FPS, MOODS, SIZES, Stage, animatedSvg, clipFrames, rasterCells, stageWidth, upscale } from './clawd.ts'
 import type { Canvas, Mood } from './clawd.ts'
 
 const shown = atom({ plugin: 'dancing-claude', key: 'shown' } as const, true)
-const size = atom({ plugin: 'dancing-claude', key: 'size' } as const, 'small')
+const size = atom({ plugin: 'dancing-claude', key: 'size' } as const, 'tiny')
 const scene = atom({ plugin: 'dancing-claude', key: 'scene' } as const, { mood: 'idle', clip: 'breathe', n: 0 })
 
 const RASTER = 'clawd'
@@ -30,36 +30,38 @@ const SHOUTING = /\b[A-Z]{3,}\b.*\b[A-Z]{3,}\b/
 /** `/clawd <word>`: the moods by name and by a few friendlier aliases. */
 const ALIASES: Record<string, Mood> = {
   dance: 'dance', boogie: 'dance', party: 'friends', friends: 'friends',
+  happy: 'happy', yay: 'happy', cheer: 'happy',
   love: 'love', pet: 'love', hug: 'love', heart: 'love',
   angry: 'angry', mad: 'angry', grr: 'angry', rage: 'angry',
   sleep: 'sleepy', nap: 'sleepy', sleepy: 'sleepy',
-  code: 'coding', coding: 'coding', type: 'coding', laptop: 'coding',
+  code: 'coding', coding: 'coding', laptop: 'coding',
+  notes: 'notes', write: 'notes',
   read: 'reading', reading: 'reading', search: 'reading',
   think: 'thinking', thinking: 'thinking', hmm: 'thinking',
   run: 'running', running: 'running', bash: 'running',
   hello: 'hello', hi: 'hello', wave: 'hello',
   oops: 'oops', eek: 'oops', ask: 'asking', asking: 'asking',
-  excited: 'excited', hype: 'excited', yay: 'excited', idle: 'idle',
+  excited: 'excited', hype: 'excited', idle: 'idle',
 }
 
-const HELP = [
-  'Clawd lives above your prompt and reacts to what Claude is doing.',
-  '/clawd               show or hide Clawd',
-  '/clawd big|small     change the size',
-  '/clawd left|center|right   where Clawd hangs out (right is home)',
-  `/clawd <emote>       ${[...new Set(Object.keys(ALIASES))].slice(0, 14).join(', ')}, ...`,
-].join('\n')
+const HELP = '/clawd [dance|happy|love|angry|sleep|code|notes|…] · tiny|small|big · left|center|right · hide|show'
 
 const stage = new Stage(80, Date.now() & 0xffff)
-let terminal: { requestId: string; scale: number; columns: number } | null = null
+let terminal: { requestId: string; size: ClawdSize } | null = null
 let desktop = false
 let lastCells = ''
 let lastFrame: Canvas | null = null
 let lastScene = ''
 let errors = 0
+let lastCheer = 0
 
 function sceneKey(): string {
   return `${stage.mood}/${stage.clip.name}`
+}
+
+function cellsFor(frame: Canvas, s: ClawdSize) {
+  const { encoding, scale } = SIZES[s]
+  return rasterCells(upscale(frame, scale), encoding)
 }
 
 async function tick($: EngineInterface): Promise<void> {
@@ -71,8 +73,8 @@ async function tick($: EngineInterface): Promise<void> {
     await update($, scene, () => next)
   }
   if (!terminal) return
-  const { requestId, scale } = terminal
-  const { cells } = rasterCells(upscale(frame, scale))
+  const { requestId } = terminal
+  const { cells } = cellsFor(frame, terminal.size)
   if (cells === lastCells) return
   lastCells = cells
   const blit = await $.ui.blit({ requestId, key: RASTER, cells })
@@ -83,17 +85,47 @@ async function loadPrefs($: EngineInterface): Promise<void> {
   const savedShown = await $.store.get('shown')
   const savedSize = await $.store.get('size')
   if (typeof savedShown === 'boolean') await update($, shown, () => savedShown)
-  if (savedSize === 'small' || savedSize === 'big') await update($, size, () => savedSize as ClawdSize)
+  if (savedSize === 'tiny' || savedSize === 'small' || savedSize === 'big') await update($, size, () => savedSize as ClawdSize)
   const pinned = await $.store.get('pinned')
   if (pinned === 'left' || pinned === 'center') stage.pinned = pinned === 'left' ? 2 : Math.floor(stage.width / 2) - 6
+}
+
+async function runCommand($: EngineInterface, word: string): Promise<string> {
+  if (word === '' || word === 'toggle' || word === 'show' || word === 'on' || word === 'hide' || word === 'off') {
+    const now = word === 'show' || word === 'on' ? true : word === 'hide' || word === 'off' ? false : !(await read($, shown))
+    await update($, shown, () => now)
+    await $.store.set('shown', now)
+    if (now) stage.play('hello', FPS * 2)
+    return now ? 'Clawd is back ✶' : 'Clawd is taking a break (/clawd brings it back)'
+  }
+  if (word === 'tiny' || word === 'small' || word === 'big') {
+    await update($, size, () => word)
+    await $.store.set('size', word)
+    return `Clawd is ${word} now`
+  }
+  if (word === 'left' || word === 'center' || word === 'right' || word === 'home') {
+    const spot = word === 'home' ? 'right' : word
+    stage.pinned = spot === 'left' ? 2 : spot === 'center' ? Math.floor(stage.width / 2) - 6 : null
+    stage.spot = null
+    await $.store.set('pinned', spot)
+    return `Clawd wanders over to the ${spot}`
+  }
+  const mood = ALIASES[word] ?? (MOODS as string[]).find(m => m === word)
+  if (!mood) return HELP
+  if (!(await read($, shown))) {
+    await update($, shown, () => true)
+    await $.store.set('shown', true)
+  }
+  stage.play(mood as Mood, mood === 'sleepy' ? FPS * 12 : FPS * 6)
+  return ''
 }
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'clawd',
-      description: 'Show, hide or cheer on Clawd, the dancing Claude above your prompt',
-      argumentHint: '[dance|love|angry|sleep|code|big|small|left|right|hide|help]',
+      description: 'Cheer on, resize or hide Clawd',
+      argumentHint: '[dance|happy|love|angry|tiny|small|big|left|right|hide]',
       immediate: true,
     })
     await loadPrefs($)
@@ -104,12 +136,20 @@ export const register: Register = on => {
     return next(e)
   })
 
+  on('prompt.edit', ($, e, next) => {
+    stage.typing()
+
+    return next(e)
+  })
+
   on('prompt.submit', async ($, e, next) => {
     const text = e.text.trim()
     if (text && !text.startsWith('/')) {
-      if (KIND.test(text)) stage.play('love', FPS * 3)
-      else if (CROSS.test(text) || SHOUTING.test(text)) stage.play('angry', FPS * 3)
-      else stage.play('excited', 12)
+      stage.typingLeft = 0
+      if (stage.base === 'notes') stage.setBase('idle')
+      if (KIND.test(text)) stage.play('love', FPS * 4)
+      else if (CROSS.test(text) || SHOUTING.test(text)) stage.play('angry', FPS * 4)
+      else stage.play('excited', 15)
     }
 
     return next(e)
@@ -124,14 +164,19 @@ export const register: Register = on => {
 
   on('tool.call', async ($, e, next) => {
     const mood = moodForTool(e.tool)
-    if (stage.emote === 'excited') stage.clearEmote()
     stage.setBase(mood)
     const ran = await next(e)
     if (ran.deny !== undefined) {
-      stage.play('oops', FPS * 2)
+      stage.play('oops', FPS * 3)
     } else if (ran.isError) {
       errors++
-      stage.play(errors >= 3 ? 'angry' : 'oops', errors >= 3 ? FPS * 3 : FPS * 2)
+      stage.play(errors >= 3 ? 'angry' : 'oops', FPS * 3)
+    } else if (mood === 'coding') {
+      const now = await $.clock.now()
+      if (now - lastCheer > 25_000) {
+        lastCheer = now
+        stage.play('happy', FPS * 3)
+      }
     }
     if (stage.base === mood) stage.setBase('thinking')
 
@@ -152,52 +197,19 @@ export const register: Register = on => {
 
   on('turn.complete', async ($, e, next) => {
     stage.setBase('idle')
-    if (e.reason === 'answer') stage.play('dance', FPS * 5)
-    else if (e.reason === 'aborted') stage.play('oops', FPS * 1.5)
+    if (e.reason === 'answer') stage.play('dance', FPS * 8)
+    else if (e.reason === 'aborted') stage.play('oops', FPS * 2)
     else if (e.reason === 'error') stage.play('oops', FPS * 3)
 
     return next(e)
   })
 
+  // Answered with a toast and no text, so /clawd never costs the model a token.
   on('command.run', { command: 'clawd' }, async ($, e) => {
-    const word = e.args.trim().toLowerCase()
-    const say = (text: string) => ({ text })
+    const said = await runCommand($, e.args.trim().toLowerCase())
+    if (said) $.ui.toast(said)
 
-    if (word === '' || word === 'toggle') {
-      const now = !(await read($, shown))
-      await update($, shown, () => now)
-      await $.store.set('shown', now)
-      if (now) stage.play('hello', FPS * 2)
-      return say(now ? 'Clawd is back ✶' : 'Clawd is taking a break. /clawd brings it back.')
-    }
-    if (word === 'show' || word === 'on' || word === 'hide' || word === 'off') {
-      const now = word === 'show' || word === 'on'
-      await update($, shown, () => now)
-      await $.store.set('shown', now)
-      return say(now ? 'Clawd is back ✶' : 'Clawd is taking a break.')
-    }
-    if (word === 'big' || word === 'small' || word === 'large') {
-      const next: ClawdSize = word === 'small' ? 'small' : 'big'
-      await update($, size, () => next)
-      await $.store.set('size', next)
-      return say(`Clawd is ${next} now.`)
-    }
-    if (word === 'left' || word === 'center' || word === 'centre' || word === 'right' || word === 'home') {
-      const spot = word === 'centre' ? 'center' : word === 'home' ? 'right' : word
-      stage.pinned = spot === 'left' ? 2 : spot === 'center' ? Math.floor(stage.width / 2) - 6 : null
-      await $.store.set('pinned', spot)
-      return say(`Clawd wanders over to the ${spot}.`)
-    }
-    const mood = ALIASES[word] ?? (MOODS as string[]).find(m => m === word)
-    if (mood) {
-      if (!(await read($, shown))) {
-        await update($, shown, () => true)
-        await $.store.set('shown', true)
-      }
-      stage.play(mood as Mood, mood === 'sleepy' ? FPS * 12 : FPS * 6)
-      return say(`Clawd: ${word}!`)
-    }
-    return say(HELP)
+    return {}
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -206,26 +218,21 @@ export const register: Register = on => {
       else desktop = false
       return next(e)
     }
+    const s = await read($, size)
 
     if (e.surface === 'terminal') {
-      const { Box, Raster } = $.ui.resolve(e)
-      const scale = (await read($, size)) === 'big' ? 2 : 1
-      const columns = Math.max(16, e.props.bodyColumns - (e.props.bodyColumns % scale))
-      const width = Math.floor(columns / scale)
+      const { Raster } = $.ui.resolve(e)
+      const width = stageWidth(e.props.bodyColumns, s)
       if (width !== stage.width) {
         stage.resize(width)
         lastFrame = null
       }
       const frame = lastFrame && lastFrame.w === width ? lastFrame : stage.tick()
-      const raster = rasterCells(upscale(frame, scale))
-      terminal = { requestId: e.requestId, scale, columns }
+      const raster = cellsFor(frame, s)
+      terminal = { requestId: e.requestId, size: s }
       lastCells = raster.cells
 
-      return (
-        <Box flexDirection="column">
-          <Raster key={RASTER} columns={raster.columns} rows={raster.rows} cells={raster.cells} />
-        </Box>
-      )
+      return <Raster key={RASTER} columns={raster.columns} rows={raster.rows} cells={raster.cells} />
     }
 
     if (e.surface === 'desktop') {
@@ -235,8 +242,7 @@ export const register: Register = on => {
       lastScene = `${now.mood}/${now.clip}`
       const clips = CLIPS[(MOODS as string[]).includes(now.mood) ? (now.mood as Mood) : 'idle']
       const clip = clips.find(c => c.name === now.clip) ?? clips[0]
-      const big = (await read($, size)) === 'big'
-      const svg = animatedSvg(clipFrames(clip, 40), FPS, big ? 8 : 5)
+      const svg = animatedSvg(clipFrames(clip, 40), FPS, s === 'big' ? 8 : s === 'small' ? 5 : 3)
 
       return (
         <Box flexDirection="row" justifyContent="flex-end">

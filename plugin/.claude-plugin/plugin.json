@@ -1,6 +1,6 @@
 {
   "name": "dancing-claude",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Clawd, the Claude Code critter, lives above your prompt and dances, codes, reads, thinks and pouts along with whatever Claude is doing.",
   "author": { "name": "nyad-dev" },
   "homepage": "https://github.com/nyad-dev/dancing-claude",
