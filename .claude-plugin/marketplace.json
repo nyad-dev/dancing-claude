@@ -1,0 +1,15 @@
+{
+  "name": "dancing-claude",
+  "owner": { "name": "nyad-dev" },
+  "metadata": {
+    "description": "Clawd, the dancing Claude, for Claude Code."
+  },
+  "plugins": [
+    {
+      "name": "dancing-claude",
+      "source": "./plugin",
+      "description": "Clawd lives above your prompt and dances, codes, reads, thinks and pouts along with whatever Claude is doing.",
+      "category": "fun"
+    }
+  ]
+}
