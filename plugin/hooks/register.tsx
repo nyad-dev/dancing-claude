@@ -223,6 +223,7 @@ export const register: Register = on => {
     if (e.surface === 'terminal') {
       const { Raster } = $.ui.resolve(e)
       const width = stageWidth(e.props.bodyColumns, s)
+      stage.even = SIZES[s].encoding === 'quad'
       if (width !== stage.width) {
         stage.resize(width)
         lastFrame = null

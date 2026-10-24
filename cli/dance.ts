@@ -18,6 +18,7 @@ if (only && !MOODS.includes(only)) {
 const out = process.stdout
 const width = () => Math.max(24, stageWidth(Math.min(out.columns ?? 80, 160), size))
 const stage = new Stage(width(), Date.now() & 0xffff)
+stage.even = encoding === 'quad'
 let index = only ? MOODS.indexOf(only) : 0
 let shownFor = 0
 const SHOW_EACH = FPS * 5

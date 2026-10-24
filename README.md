@@ -29,7 +29,7 @@ Then start a new session. It costs **zero tokens**: nothing is added to Claude's
 ```
 /clawd                     show / hide
 /clawd dance               or happy, love, angry, sleep, code, notes, party, wave…
-/clawd tiny|small|big      3 rows (default), 6 rows, 12 rows
+/clawd tiny|small|big      4 rows (default), 7 rows, 14 rows
 /clawd left|center|right   where Clawd hangs out
 ```
 

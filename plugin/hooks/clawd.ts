@@ -46,10 +46,10 @@ export const PALETTE = {
 /** The body colours: a quarter-block cell lets anything else win over them. */
 const SKIN = new Set<Color>([PALETTE.body, PALETTE.back, PALETTE.angry])
 
-/** Rows of the stage in base pixels: 2 of headroom, 8 of body, 2 of legs. */
-export const STAGE_H = 12
-/** Body top while standing. Even, so quarter-blocks split the body like the logo. */
-const TOP = 2
+/** Rows of the stage in base pixels: 4 of headroom (hops, raised arms, props), 8 of body, 2 of legs. */
+export const STAGE_H = 14
+/** Body top while standing. A multiple of 4, so quarter-blocks split the body like the logo. */
+const TOP = 4
 export const FPS = 10
 
 // ---------------------------------------------------------------- canvas
@@ -289,14 +289,12 @@ function drawLaptop(cv: Canvas, X: number, top: number, typing: 0 | 1): void {
 }
 
 function drawNotepad(cv: Canvas, X: number, top: number, pen: 0 | 1 | 2): void {
-  // a little pad held low on the right, ruled, with a pencil scribbling across
-  cv.rect(X + 7, top + 4, 5, 4, PALETTE.paper)
-  cv.rect(X + 8, top + 5, 3, 1, PALETTE.ink)
-  cv.rect(X + 8, top + 7, 2, 1, PALETTE.ink)
-  cv.rect(X + 12, top + 4, 1, 2, PALETTE.body) // the paw holding it
-  cv.set(X + 7 + pen, top + 3, PALETTE.pencil)
-  cv.set(X + 8 + pen, top + 2, PALETTE.pencil)
-  cv.set(X + 7 + pen, top + 4 + (pen % 2), PALETTE.eye) // the tip
+  // a little ruled pad held out in the right paw, a pencil scribbling on it
+  cv.rect(X + 14, top + 4, 4, 4, PALETTE.paper)
+  cv.rect(X + 15, top + 5, 2, 1, PALETTE.ink)
+  cv.rect(X + 15, top + 7, 2, 1, PALETTE.ink)
+  cv.set(X + 14 + pen, top + 3, PALETTE.pencil)
+  cv.set(X + 15 + pen, top + 2, PALETTE.pencil)
 }
 
 // ---------------------------------------------------------------- clips
@@ -414,8 +412,8 @@ export const CLIPS = {
     {
       name: 'scribble', len: 40, weight: 3,
       frame: (f, seed) => pose({
-        notepad: cyc(Math.floor(f / 2), [0, 1, 2, 1] as const), armR: 'hidden',
-        eyes: blinks(f, seed, 40) ? 'blink' : 'open', lookX: 1, lookY: 1,
+        notepad: cyc(Math.floor(f / 2), [0, 1, 2, 1] as const),
+        eyes: blinks(f, seed, 40) ? 'blink' : 'open', lookX: 1,
         dy: f % 20 === 10 ? 1 : 0,
       }),
     },
@@ -424,8 +422,8 @@ export const CLIPS = {
       frame: f => {
         const look = f < 20
         return pose({
-          notepad: look ? 0 : cyc(Math.floor(f / 2), [0, 1, 2, 1] as const), armR: 'hidden',
-          eyes: f === 8 || f === 30 ? 'blink' : 'open', lookX: look ? -1 : 1, lookY: 1,
+          notepad: look ? 0 : cyc(Math.floor(f / 2), [0, 1, 2, 1] as const),
+          eyes: f === 8 || f === 30 ? 'blink' : 'open', lookX: look ? -1 : 1,
           props: look && f > 4 ? [{ s: SPRITES.thinkS, x: -2, y: 1 }] : [],
         })
       },
@@ -433,7 +431,7 @@ export const CLIPS = {
     {
       name: 'nod', len: 30, weight: 1,
       frame: f => pose({
-        notepad: 1, armR: 'hidden', lookY: 1,
+        notepad: 1,
         dy: cyc(Math.floor(f / 3), [0, 1, 0, 0, 0]), eyes: f >= 20 ? 'happy' : 'open',
       }),
     },
@@ -476,13 +474,13 @@ export const CLIPS = {
         if (f >= 4) dots.push({ s: SPRITES.thinkS, x: 13, y: 1 })
         if (f >= 10) dots.push({ s: SPRITES.thinkM, x: 15, y: -1 })
         if (f >= 16) dots.push({ s: SPRITES.thinkL, x: 17, y: -2 })
-        return pose({ eyes: f === 26 ? 'blink' : 'open', lookX: 1, lookY: -1, armR: 'up', props: dots })
+        return pose({ eyes: f === 26 ? 'blink' : 'open', lookX: 1, armR: 'up', props: dots })
       },
     },
     {
       name: 'hmm', len: 30, weight: 1,
       frame: f => pose({
-        eyes: f < 15 ? 'open' : 'closed', lookX: -1, lookY: -1, lean: cyc(Math.floor(f / 5), [0, -1, 0, 1]),
+        eyes: f < 15 ? 'open' : 'closed', lookX: -1, lean: cyc(Math.floor(f / 5), [0, -1, 0, 1]),
         props: f >= 6 ? [{ s: SPRITES.ask, x: 14, y: -2 + (f % 10 < 5 ? 0 : 1) }] : [],
       }),
     },
@@ -491,7 +489,7 @@ export const CLIPS = {
       frame: f => {
         const lit = f >= 12
         return pose({
-          eyes: lit ? 'star' : 'open', lookY: lit ? 0 : -1, dy: f === 12 || f === 13 ? -1 : 0,
+          eyes: lit ? 'star' : 'open', dy: f === 12 || f === 13 ? -1 : 0,
           armR: lit ? 'high' : 'up',
           props: lit ? [{ s: SPRITES.spark, x: 15, y: -2 + (f % 4 < 2 ? 0 : 1) }] : [{ s: SPRITES.thinkS, x: 13, y: 1 }],
         })
@@ -504,7 +502,7 @@ export const CLIPS = {
       frame: f => {
         const found = f >= 26
         return pose({
-          eyes: found ? 'wide' : 'open', lookX: found ? 1 : cyc(Math.floor(f / 4), [-1, 0, 1, 0]), lookY: 1,
+          eyes: found ? 'wide' : 'open', lookX: found ? 1 : cyc(Math.floor(f / 4), [-1, 0, 1, 0]),
           armR: 'up', props: [
             { s: SPRITES.magnifier, x: 13, y: -2 + (f % 8 < 4 ? 0 : 1) },
             ...(found ? [{ s: SPRITES.spark, x: 17, y: -2 }] : []),
@@ -523,7 +521,7 @@ export const CLIPS = {
           const s = [SPRITES.code1, SPRITES.code2, SPRITES.code3][k]
           sparks.push({ s, x: [-3, 6, 14][k] + (t % 4 < 2 ? 0 : 1), y: 1 - Math.floor(t / 4) })
         }
-        return pose({ eyes: f === 20 ? 'blink' : 'open', lookY: 1, laptop: (f % 2) as 0 | 1, armL: 'hidden', armR: 'hidden', props: sparks })
+        return pose({ eyes: f === 20 ? 'blink' : 'open', laptop: (f % 2) as 0 | 1, armL: 'hidden', armR: 'hidden', props: sparks })
       },
     },
     {
@@ -810,7 +808,9 @@ export class Stage {
   /** Where an idle Clawd has wandered off to, how long it stays, when it next goes. */
   spot: number | null = null
   stayLeft = 0
-  wanderIn = FPS * 25
+  wanderIn = FPS * 60
+  /** Quarter-block drawing: keep the body on whole cells (no squash, hops in steps of two). */
+  even = false
   /** When an idle Clawd next breaks into a little dance for no reason. */
   danceIn = FPS * 40
 
@@ -887,7 +887,7 @@ export class Stage {
   private restart(): void {
     this.clip = pickClip(this.mood, this.rand())
     this.f = 0
-    this.pause = 0
+    this.pause = this.mood === 'thinking' ? FPS * 6 : 0
     this.held = 0
     this.target = null
   }
@@ -900,11 +900,10 @@ export class Stage {
         this.gait = 'walk'
       }
     } else if (Math.abs(this.pos - this.home) < 0.5 && this.pinned === null && --this.wanderIn <= 0) {
-      this.wanderIn = FPS * (20 + Math.floor(this.rand() * 30))
+      this.wanderIn = FPS * (60 + Math.floor(this.rand() * 60))
       const room = this.width - 16
       if (room > 30) {
-        let to = 2 + Math.floor(this.rand() * (room - 2))
-        if (Math.abs(to - this.home) < 14) to = Math.max(2, this.home - 14 - Math.floor(this.rand() * 10))
+        const to = Math.max(2, this.home - 10 - Math.floor(this.rand() * 16))
         this.spot = to
         this.stayLeft = FPS * (6 + Math.floor(this.rand() * 8))
         this.gait = this.rand() < 0.5 ? 'hop' : 'walk'
@@ -968,14 +967,14 @@ export class Stage {
         playClip()
       } else {
         if (this.target === null) {
-          const far = Math.max(2, this.home - Math.min(48, Math.floor(this.width * 0.45)))
+          const far = Math.max(2, this.home - 8 - Math.floor(this.rand() * 8))
           this.target = this.pos > (far + this.home) / 2 ? far : this.home
           this.gait = this.rand() < 0.3 ? 'hop' : 'walk'
         }
-        const thought = (f: number): Partial<Pose> => ({ lookY: -1, props: [{ s: SPRITES.thinkS, x: 13, y: 1 }, ...(f % 8 < 4 ? [] : [{ s: SPRITES.thinkM, x: 15, y: -1 }])] })
+        const thought = (f: number): Partial<Pose> => ({ props: [{ s: SPRITES.thinkS, x: 13, y: 1 }, ...(f % 8 < 4 ? [] : [{ s: SPRITES.thinkM, x: 15, y: -1 }])] })
         if (!travel(this.target, thought)) {
           this.target = null
-          this.pause = FPS * 3 + Math.floor(this.rand() * FPS * 3)
+          this.pause = FPS * 8 + Math.floor(this.rand() * FPS * 8)
           this.clip = pickClip('thinking', this.rand())
           this.f = 0
           playClip()
@@ -1004,6 +1003,7 @@ export class Stage {
       if (wasAwake && this.quiet > SLEEP_AFTER) this.restart()
     }
 
+    if (this.even) p = { ...p!, squash: 0, dy: 2 * Math.round(p!.dy / 2) }
     const cv = new Canvas(this.width, STAGE_H)
     drawClawd(cv, p!, this.pos)
     return cv
@@ -1072,9 +1072,15 @@ function squeeze(a: Color, b: Color): Color {
   return SKIN.has(a) ? b : a
 }
 
+/**
+ * Quarter-block rows are lined up with the body top, so the cells split Clawd
+ * where the logo does: head and eyes, arms and tummy, legs; one row above.
+ */
+const QUAD_Y0 = TOP - 4
+
 function quadCells(cv: Canvas): Cells {
   const columns = Math.ceil(cv.w / 2)
-  const rows = Math.ceil(cv.h / 4)
+  const rows = Math.ceil((cv.h - QUAD_Y0) / 4)
   const n = columns * rows
   const out: Cells = { columns, rows, ch: new Uint32Array(n), fg: new Uint32Array(n), bg: new Uint32Array(n) }
   const sub = [0, 0, 0, 0]
@@ -1082,7 +1088,7 @@ function quadCells(cv: Canvas): Cells {
     for (let c = 0; c < columns; c++) {
       for (let k = 0; k < 4; k++) {
         const x = c * 2 + (k & 1)
-        const y = r * 4 + (k >> 1) * 2
+        const y = QUAD_Y0 + r * 4 + (k >> 1) * 2
         sub[k] = squeeze(cv.get(x, y), cv.get(x, y + 1))
       }
       // the commonest colour is the glyph, the next the background
